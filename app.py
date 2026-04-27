@@ -145,7 +145,7 @@ st.caption("EPC energy ratings · Land Registry price paid · Area sales")
 with st.form("search_form"):
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
-        postcode_in = st.text_input("Postcode", placeholder="e.g. SM6 9LD")
+        postcode_in = st.text_input("Postcode", placeholder="e.g. SW1A 1AA")
     with col2:
         number_in = st.text_input("House number / name", placeholder="e.g. 2")
     with col3:
