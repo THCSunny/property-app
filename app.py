@@ -16,16 +16,9 @@ st.set_page_config(
     layout="wide",
 )
 
-# ── Styling ───────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .block-container { padding-top: 2rem; max-width: 960px; }
-    .metric-card {
-        background: #f8f9fa; border-radius: 10px;
-        padding: 1rem 1.2rem; text-align: center;
-    }
-    .metric-card .label { font-size: 12px; color: #666; margin-bottom: 4px; }
-    .metric-card .value { font-size: 22px; font-weight: 600; color: #111; }
     .epc-badge {
         display: inline-block; width: 48px; height: 48px;
         border-radius: 50%; line-height: 48px; text-align: center;
@@ -37,9 +30,9 @@ st.markdown("""
 
 EPC_COLORS = {
     "A": "#1a9641", "B": "#52b153", "C": "#9ecb60",
-    "D": "#ffffbf", "E": "#fecc5c", "F": "#fd8d3c", "G": "#d7191c",
+    "D": "#b0b000", "E": "#fecc5c", "F": "#fd8d3c", "G": "#d7191c",
 }
-EPC_TEXT = {"A":"white","B":"white","C":"white","D":"#333","E":"#333","F":"white","G":"white"}
+EPC_TEXT = {"A":"white","B":"white","C":"white","D":"white","E":"#333","F":"white","G":"white"}
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def clean_postcode(pc: str) -> str:
@@ -48,27 +41,63 @@ def clean_postcode(pc: str) -> str:
 def fmt_price(p) -> str:
     try:
         return f"£{int(float(p)):,}"
-    except:
+    except Exception:
         return str(p)
 
+def auth_header() -> dict:
+    token = b64encode(f"{EPC_EMAIL}:{EPC_KEY}".encode()).decode()
+    return {"Accept": "application/json", "Authorization": f"Basic {token}"}
+
+# ── EPC: single property ──────────────────────────────────────────────────────
 def fetch_epc(postcode: str, number: str) -> dict | None:
     params = {"postcode": postcode, "size": 50}
     if number:
         params["address"] = number
-    token = b64encode(f"{EPC_EMAIL}:{EPC_KEY}".encode()).decode()
     try:
-        r = requests.get(EPC_API, params=params,
-                         headers={"Accept": "application/json",
-                                  "Authorization": f"Basic {token}"},
-                         timeout=10)
+        r = requests.get(EPC_API, params=params, headers=auth_header(), timeout=10)
         r.raise_for_status()
-        data = r.json()
-        rows = data.get("rows", [])
+        rows = r.json().get("rows", [])
         return rows[0] if rows else None
     except Exception as e:
         st.warning(f"EPC API error: {e}")
         return None
 
+# ── EPC: all records for postcode → lookup dict keyed by normalised house number
+def fetch_all_epc(postcode: str) -> dict:
+    try:
+        r = requests.get(EPC_API,
+                         params={"postcode": postcode, "size": 100},
+                         headers=auth_header(), timeout=10)
+        r.raise_for_status()
+        rows = r.json().get("rows", [])
+    except Exception:
+        return {}
+
+    lookup: dict = {}
+    for row in rows:
+        addr1 = (row.get("address1") or "").strip().upper()
+        key = _extract_number_key(addr1)
+        if key and key not in lookup:
+            lookup[key] = {
+                "rating": (row.get("current-energy-rating") or "").upper(),
+                "score":  row.get("current-energy-efficiency", ""),
+                "area":   row.get("total-floor-area", ""),
+            }
+    return lookup
+
+def _extract_number_key(text: str) -> str:
+    """Return the first numeric/alphanumeric house-number token found in text."""
+    for tok in text.split():
+        clean = tok.rstrip(",")
+        if clean.isdigit() or (len(clean) >= 2 and clean[:-1].isdigit() and clean[-1].isalpha()):
+            return clean.lstrip("0") or "0"
+    return ""
+
+def paon_to_key(paon: str) -> str:
+    """Normalise a Land Registry PAON for EPC lookup."""
+    return _extract_number_key(paon.strip().upper())
+
+# ── Land Registry ─────────────────────────────────────────────────────────────
 def run_sparql(query: str) -> list[dict]:
     try:
         r = requests.get(LR_SPARQL,
@@ -83,8 +112,10 @@ def run_sparql(query: str) -> list[dict]:
         return []
 
 def fetch_history(postcode: str, number: str) -> list[dict]:
-    # Exact match: LCASE+TRIM to handle case and whitespace, but not partial matches
-    num_filter = f'FILTER(LCASE(REPLACE(STR(?paon), " ", "")) = LCASE(REPLACE("{number}", " ", "")))' if number else ""
+    num_filter = (
+        f'FILTER(LCASE(REPLACE(STR(?paon), " ", "")) = LCASE(REPLACE("{number}", " ", "")))'
+        if number else ""
+    )
     q = f"""
 PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
 PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
@@ -102,7 +133,7 @@ SELECT ?date ?price ?paon ?saon ?street ?type WHERE {{
     return run_sparql(q)
 
 def fetch_area(postcode: str) -> list[dict]:
-    cutoff = (datetime.now() - timedelta(days=5*365)).strftime("%Y-%m-%d")
+    cutoff = (datetime.now() - timedelta(days=5 * 365)).strftime("%Y-%m-%d")
     q = f"""
 PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
 PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
@@ -120,23 +151,30 @@ SELECT ?date ?price ?paon ?saon ?street ?type WHERE {{
 }} ORDER BY DESC(?date) LIMIT 100"""
     return run_sparql(q)
 
-TYPE_MAP = {"D":"Detached","S":"Semi-detached","T":"Terraced","F":"Flat","O":"Other"}
+TYPE_MAP = {"D": "Detached", "S": "Semi-detached", "T": "Terraced", "F": "Flat", "O": "Other"}
 
 def parse_type(uri: str) -> str:
     key = uri.split("/")[-1] if uri else ""
     return TYPE_MAP.get(key[:1].upper(), key)
 
-def rows_to_df(rows: list[dict]) -> pd.DataFrame:
+def rows_to_df(rows: list[dict], epc_map: dict | None = None) -> pd.DataFrame:
     records = []
     for r in rows:
-        addr = " ".join(filter(None, [r.get("saon",""), r.get("paon",""), r.get("street","")]))
-        records.append({
-            "Date": r.get("date","")[:10],
-            "Price": fmt_price(r.get("price",0)),
-            "Price (£)": int(float(r.get("price",0))) if r.get("price") else 0,
-            "Address": addr,
-            "Type": parse_type(r.get("type","")),
-        })
+        paon = r.get("paon", "")
+        addr = " ".join(filter(None, [r.get("saon", ""), paon, r.get("street", "")]))
+        rec = {
+            "Date":      r.get("date", "")[:10],
+            "Price":     fmt_price(r.get("price", 0)),
+            "Price (£)": int(float(r.get("price", 0))) if r.get("price") else 0,
+            "Address":   addr,
+            "Type":      parse_type(r.get("type", "")),
+        }
+        if epc_map is not None:
+            key      = paon_to_key(paon) if paon else ""
+            epc_info = epc_map.get(key, {})
+            rec["EPC"] = epc_info.get("rating") or "—"
+            rec["Area (m²)"] = epc_info.get("area") or "—"
+        records.append(rec)
     return pd.DataFrame(records)
 
 # ── UI ────────────────────────────────────────────────────────────────────────
@@ -146,7 +184,7 @@ st.caption("EPC energy ratings · Land Registry price paid · Area sales")
 with st.form("search_form"):
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
-        postcode_in = st.text_input("Postcode", placeholder="e.g. SM6 9LD")
+        postcode_in = st.text_input("Postcode", placeholder="e.g. SW1 1AA")
     with col2:
         number_in = st.text_input("House number / name", placeholder="e.g. 2")
     with col3:
@@ -161,22 +199,25 @@ if submitted:
         st.error("Please enter a postcode.")
         st.stop()
 
-    # ── EPC ──────────────────────────────────────────────────────────────────
+    # ── EPC (single property) + full postcode EPC map ─────────────────────────
     st.subheader("Energy Performance Certificate")
     with st.spinner("Fetching EPC data…"):
-        epc = fetch_epc(postcode, number)
+        epc     = fetch_epc(postcode, number)
+        epc_map = fetch_all_epc(postcode)
 
     if epc:
-        rating  = (epc.get("current-energy-rating") or "?").upper()
-        score   = epc.get("current-energy-efficiency", "—")
-        pot_r   = (epc.get("potential-energy-rating") or "—").upper()
-        pot_s   = epc.get("potential-energy-efficiency", "—")
-        floor   = epc.get("total-floor-area", "—")
-        ptype   = epc.get("property-type", "—")
-        bform   = epc.get("built-form", "—")
-        tenure  = epc.get("tenure", "—")
-        idate   = epc.get("lodgement-date") or epc.get("inspection-date", "—")
-        addr    = ", ".join(filter(None, [epc.get("address1",""), epc.get("address2",""), epc.get("address3","")]))
+        rating = (epc.get("current-energy-rating") or "?").upper()
+        score  = epc.get("current-energy-efficiency", "—")
+        pot_r  = (epc.get("potential-energy-rating") or "—").upper()
+        pot_s  = epc.get("potential-energy-efficiency", "—")
+        floor  = epc.get("total-floor-area", "—")
+        ptype  = epc.get("property-type", "—")
+        bform  = epc.get("built-form", "—")
+        tenure = epc.get("tenure", "—")
+        idate  = epc.get("lodgement-date") or epc.get("inspection-date", "—")
+        addr   = ", ".join(filter(None, [
+            epc.get("address1", ""), epc.get("address2", ""), epc.get("address3", "")
+        ]))
 
         col_badge, col_info = st.columns([1, 4])
         with col_badge:
@@ -187,59 +228,64 @@ if submitted:
               <div class='epc-badge' style='background:{bg};color:{tc};margin:auto'>{rating}</div>
               <div style='margin-top:8px;font-size:13px;color:#555'>Current rating</div>
             </div>""", unsafe_allow_html=True)
-
         with col_info:
-            c1,c2,c3,c4 = st.columns(4)
+            c1, c2, c3, c4 = st.columns(4)
             c1.metric("Current score", f"{score}/100")
             c2.metric("Potential", f"{pot_r} ({pot_s})")
             c3.metric("Floor area", f"{floor} m²")
             c4.metric("Tenure", tenure)
             st.caption(f"**{addr}** · {ptype} · {bform} · Inspected: {idate}")
     else:
-        st.info("No EPC certificate found for this address. The property may not have been assessed since 2008, or may be a very new build.")
+        st.info("No EPC certificate found. The property may not have been assessed since 2008.")
 
     st.divider()
 
-    # ── History ───────────────────────────────────────────────────────────────
+    # ── Price paid history (this property) ────────────────────────────────────
     st.subheader(f"Price paid history — {number+' ' if number else ''}{postcode}")
     with st.spinner("Fetching transaction history…"):
         hist_rows = fetch_history(postcode, number)
 
     if hist_rows:
         df_hist = rows_to_df(hist_rows)
-        st.dataframe(
-            df_hist[["Date","Price","Address","Type"]],
-            use_container_width=True, hide_index=True,
-        )
+        st.dataframe(df_hist[["Date", "Price", "Address", "Type"]],
+                     use_container_width=True, hide_index=True)
     else:
         st.info("No transaction history found. Land Registry records sales from 1995 onwards.")
 
     st.divider()
 
-    # ── Area sales ────────────────────────────────────────────────────────────
+    # ── Area sales (last 5 years) with EPC columns ────────────────────────────
     st.subheader(f"Area sales — {postcode} (last 5 years)")
     with st.spinner("Fetching area sales…"):
         area_rows = fetch_area(postcode)
 
     if area_rows:
-        df_area = rows_to_df(area_rows)
+        df_area = rows_to_df(area_rows, epc_map=epc_map)
         prices  = df_area["Price (£)"].dropna()
 
-        c1,c2,c3,c4 = st.columns(4)
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Total sales", len(prices))
-        c2.metric("Average", fmt_price(prices.mean()))
-        c3.metric("Median",  fmt_price(prices.median()))
-        c4.metric("Range",   f"{fmt_price(prices.min())} – {fmt_price(prices.max())}")
+        c2.metric("Average",     fmt_price(prices.mean()))
+        c3.metric("Median",      fmt_price(prices.median()))
+        c4.metric("Range",       f"{fmt_price(prices.min())} – {fmt_price(prices.max())}")
 
         if len(df_area) >= 3:
-            chart_df = df_area[["Date","Price (£)"]].copy()
+            chart_df = df_area[["Date", "Price (£)"]].copy()
             chart_df["Date"] = pd.to_datetime(chart_df["Date"], errors="coerce")
             chart_df = chart_df.dropna().sort_values("Date").set_index("Date")
             st.line_chart(chart_df, y="Price (£)", use_container_width=True, height=220)
 
         st.dataframe(
-            df_area[["Date","Price","Address","Type"]],
+            df_area[["Date", "Price", "Address", "Type", "EPC", "Area (m²)"]],
             use_container_width=True, hide_index=True,
         )
+
+        matched = (df_area["EPC"] != "—").sum()
+        total   = len(df_area)
+        if matched < total:
+            st.caption(
+                f"EPC matched for {matched}/{total} properties. "
+                "Unmatched entries have no EPC record or use a non-numeric address."
+            )
     else:
         st.info("No sales found in this postcode in the last 5 years.")
