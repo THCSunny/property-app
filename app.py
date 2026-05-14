@@ -48,25 +48,35 @@ def epc_auth_header() -> dict:
         "Authorization": f"Bearer {EPC_TOKEN}",
     }
 
-# ── EPC: parse new API response format ───────────────────────────────────────
-def parse_epc_record(rec: dict) -> dict:
-    """Normalise new camelCase API fields to internal keys."""
-    return {
-        "current-energy-rating":      (rec.get("currentEnergyEfficiencyBand") or "").upper(),
-        "current-energy-efficiency":  rec.get("currentEnergyEfficiencyRating", ""),
-        "potential-energy-rating":    (rec.get("potentialEnergyEfficiencyBand") or "").upper(),
-        "potential-energy-efficiency": rec.get("potentialEnergyEfficiencyRating", ""),
-        "total-floor-area":           rec.get("totalFloorArea", ""),
-        "property-type":              rec.get("propertyType", ""),
-        "built-form":                 rec.get("builtForm", ""),
-        "tenure":                     rec.get("tenure", ""),
-        "lodgement-date":             rec.get("registrationDate", ""),
-        "address1":                   rec.get("addressLine1", ""),
-        "address2":                   rec.get("addressLine2", ""),
-        "address3":                   rec.get("addressLine3", ""),
-    }
+EPC_CERT_API = "https://api.get-energy-performance-data.communities.gov.uk/api/certificate"
 
-# ── EPC: single property ──────────────────────────────────────────────────────
+# ── EPC: fetch full certificate detail by certificate number ──────────────────
+def fetch_epc_detail(cert_number: str) -> dict | None:
+    try:
+        r = requests.get(EPC_CERT_API,
+                         params={"certificate_number": cert_number},
+                         headers=epc_auth_header(), timeout=10)
+        r.raise_for_status()
+        data = r.json().get("data", {})
+        # Normalise to internal keys (new API uses snake_case in full record)
+        return {
+            "current-energy-rating":       (data.get("current_energy_efficiency_band") or "").upper(),
+            "current-energy-efficiency":   str(data.get("current_energy_efficiency_rating", "") or ""),
+            "potential-energy-rating":     (data.get("potential_energy_efficiency_band") or "").upper(),
+            "potential-energy-efficiency": str(data.get("potential_energy_efficiency_rating", "") or ""),
+            "total-floor-area":            str(data.get("total_floor_area", "") or ""),
+            "property-type":               data.get("property_type", ""),
+            "built-form":                  data.get("built_form", ""),
+            "tenure":                      data.get("tenure", ""),
+            "lodgement-date":              data.get("registration_date", ""),
+            "address1":                    data.get("address_line_1", ""),
+            "address2":                    data.get("address_line_2", ""),
+            "address3":                    data.get("address_line_3", ""),
+        }
+    except Exception:
+        return None
+
+# ── EPC: single property (search → then fetch full detail) ────────────────────
 def fetch_epc(postcode: str, number: str) -> dict | None:
     params = {"postcode": postcode, "page_size": 50}
     if number:
@@ -77,9 +87,30 @@ def fetch_epc(postcode: str, number: str) -> dict | None:
         records = r.json().get("data", [])
         if not records:
             return None
-        # If address filter applied, already filtered; else return first
-        st.write(records[0])  # 臨時 debug
-        return parse_epc_record(records[0])
+        cert_number = records[0].get("certificateNumber")
+        if cert_number:
+            detail = fetch_epc_detail(cert_number)
+            if detail:
+                # Fill address from search result if detail is missing it
+                if not detail.get("address1"):
+                    detail["address1"] = records[0].get("addressLine1", "")
+                return detail
+        # Fallback: return basic info from search result only
+        rec = records[0]
+        return {
+            "current-energy-rating":       (rec.get("currentEnergyEfficiencyBand") or "").upper(),
+            "current-energy-efficiency":   "",
+            "potential-energy-rating":     "",
+            "potential-energy-efficiency": "",
+            "total-floor-area":            "",
+            "property-type":               "",
+            "built-form":                  "",
+            "tenure":                      "",
+            "lodgement-date":              rec.get("registrationDate", ""),
+            "address1":                    rec.get("addressLine1", ""),
+            "address2":                    rec.get("addressLine2", ""),
+            "address3":                    rec.get("addressLine3", ""),
+        }
     except Exception as e:
         st.warning(f"EPC API error: {e}")
         return None
@@ -206,9 +237,9 @@ st.caption("EPC energy ratings · Land Registry price paid · Area sales")
 with st.form("search_form"):
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
-        postcode_in = st.text_input("Postcode", placeholder="e.g. SW1 1AA")
+        postcode_in = st.text_input("Postcode", placeholder="e.g. SM6 9LD")
     with col2:
-        number_in = st.text_input("House number / name", placeholder="e.g. 1")
+        number_in = st.text_input("House number / name", placeholder="e.g. 2")
     with col3:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
         submitted = st.form_submit_button("Search", use_container_width=True, type="primary")
