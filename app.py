@@ -218,6 +218,8 @@ if submitted:
         epc     = fetch_epc(postcode, number)
         epc_map = fetch_all_epc(postcode)
 
+    st.write("EPC map keys:", list(epc_map.keys()))  # temp debug
+
     if epc:
         d  = epc
         sr = epc.get("_search", {})
