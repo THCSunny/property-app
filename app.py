@@ -102,7 +102,10 @@ def run_sparql(query: str) -> list[dict]:
     try:
         r = requests.get(LR_SPARQL,
                          params={"query": query, "output": "json"},
-                         headers={"Accept": "application/sparql-results+json"},
+                         headers={
+                             "Accept": "application/sparql-results+json",
+                             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                         },
                          timeout=15)
         r.raise_for_status()
         bindings = r.json()["results"]["bindings"]
@@ -186,7 +189,7 @@ with st.form("search_form"):
     with col1:
         postcode_in = st.text_input("Postcode", placeholder="e.g. SW1 1AA")
     with col2:
-        number_in = st.text_input("House number / name", placeholder="e.g. 2")
+        number_in = st.text_input("House number / name", placeholder="e.g. 1")
     with col3:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
         submitted = st.form_submit_button("Search", use_container_width=True, type="primary")
