@@ -290,16 +290,51 @@ if submitted:
             heating = d.get("main_heating",[{}])[0]
             hotwater= d.get("hot_water",{})
 
+            def get_desc(obj):
+                """Extract description string whether it is a str or {value:..} dict."""
+                if isinstance(obj, dict):
+                    return obj.get("value") or obj.get("description") or "—"
+                return str(obj) if obj else "—"
+
+            ELEMENT_ICONS = {"Walls":"🧱","Roof":"🏠","Floor":"⬜","Windows":"🪟","Heating":"🔥","Hot water":"🚿"}
             const_rows = [
-                ("Walls",     walls.get("description","—"),    star(walls.get("energy_efficiency_rating",0))),
-                ("Roof",      roof.get("description","—"),     star(roof.get("energy_efficiency_rating",0))),
-                ("Floor",     floor_d.get("description","—"),  star(floor_d.get("energy_efficiency_rating",0))),
-                ("Windows",   window.get("description","—"),   star(window.get("energy_efficiency_rating",0))),
-                ("Heating",   heating.get("description","—"),  star(heating.get("energy_efficiency_rating",0))),
-                ("Hot water", hotwater.get("description","—"), star(hotwater.get("energy_efficiency_rating",0))),
+                ("Walls",     get_desc(walls.get("description")),    walls.get("energy_efficiency_rating",0)),
+                ("Roof",      get_desc(roof.get("description")),     roof.get("energy_efficiency_rating",0)),
+                ("Floor",     get_desc(floor_d.get("description")),  floor_d.get("energy_efficiency_rating",0)),
+                ("Windows",   get_desc(window.get("description")),   window.get("energy_efficiency_rating",0)),
+                ("Heating",   get_desc(heating.get("description")),  heating.get("energy_efficiency_rating",0)),
+                ("Hot water", get_desc(hotwater.get("description")), hotwater.get("energy_efficiency_rating",0)),
             ]
-            df_const = pd.DataFrame(const_rows, columns=["Element","Description","Efficiency (/5)"])
-            st.dataframe(df_const, use_container_width=True, hide_index=True)
+
+            html_rows = ""
+            for element, desc, rating_num in const_rows:
+                rating_num = int(rating_num) if str(rating_num).isdigit() else 0
+                filled = "★" * rating_num
+                empty  = "☆" * (5 - rating_num)
+                color  = ["#d7191c","#fd8d3c","#fecc5c","#9ecb60","#1a9641"][min(rating_num,4)] if rating_num>0 else "#ccc"
+                icon   = ELEMENT_ICONS.get(element,"")
+                html_rows += f"""
+                <tr>
+                  <td style="padding:10px 14px;font-weight:500;white-space:nowrap;color:#333">{icon} {element}</td>
+                  <td style="padding:10px 14px;color:#555;font-size:13px">{desc}</td>
+                  <td style="padding:10px 14px;white-space:nowrap">
+                    <span style="color:{color};font-size:16px;letter-spacing:2px">{filled}</span><span style="color:#ddd;font-size:16px;letter-spacing:2px">{empty}</span>
+                    <span style="margin-left:6px;font-size:12px;color:#999">{rating_num}/5</span>
+                  </td>
+                </tr>"""
+
+            st.markdown(f"""
+            <table style="width:100%;border-collapse:collapse;font-size:14px">
+              <thead>
+                <tr style="border-bottom:2px solid #f0f0f0">
+                  <th style="padding:8px 14px;text-align:left;color:#888;font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;width:120px">Element</th>
+                  <th style="padding:8px 14px;text-align:left;color:#888;font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:0.05em">Description</th>
+                  <th style="padding:8px 14px;text-align:left;color:#888;font-weight:500;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;width:160px">Efficiency</th>
+                </tr>
+              </thead>
+              <tbody>{html_rows}</tbody>
+            </table>
+            """, unsafe_allow_html=True)
 
         with tab2:
             st.markdown("**Current vs potential annual costs**")
