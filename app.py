@@ -2,12 +2,10 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-from base64 import b64encode
 
 # ── Config ────────────────────────────────────────────────────────────────────
-EPC_EMAIL = st.secrets["EPC_EMAIL"]
-EPC_KEY   = st.secrets["EPC_KEY"]
-EPC_API   = "https://epc.opendatacommunities.org/api/v1/domestic/search"
+EPC_TOKEN = st.secrets["EPC_TOKEN"]
+EPC_API   = "https://api.get-energy-performance-data.communities.gov.uk/api/domestic/search"
 LR_SPARQL = "https://landregistry.data.gov.uk/landregistry/query"
 
 st.set_page_config(
@@ -44,49 +42,70 @@ def fmt_price(p) -> str:
     except Exception:
         return str(p)
 
-def auth_header() -> dict:
-    token = b64encode(f"{EPC_EMAIL}:{EPC_KEY}".encode()).decode()
-    return {"Accept": "application/json", "Authorization": f"Basic {token}"}
+def epc_auth_header() -> dict:
+    return {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {EPC_TOKEN}",
+    }
+
+# ── EPC: parse new API response format ───────────────────────────────────────
+def parse_epc_record(rec: dict) -> dict:
+    """Normalise new camelCase API fields to internal keys."""
+    return {
+        "current-energy-rating":      (rec.get("currentEnergyEfficiencyBand") or "").upper(),
+        "current-energy-efficiency":  rec.get("currentEnergyEfficiencyRating", ""),
+        "potential-energy-rating":    (rec.get("potentialEnergyEfficiencyBand") or "").upper(),
+        "potential-energy-efficiency": rec.get("potentialEnergyEfficiencyRating", ""),
+        "total-floor-area":           rec.get("totalFloorArea", ""),
+        "property-type":              rec.get("propertyType", ""),
+        "built-form":                 rec.get("builtForm", ""),
+        "tenure":                     rec.get("tenure", ""),
+        "lodgement-date":             rec.get("registrationDate", ""),
+        "address1":                   rec.get("addressLine1", ""),
+        "address2":                   rec.get("addressLine2", ""),
+        "address3":                   rec.get("addressLine3", ""),
+    }
 
 # ── EPC: single property ──────────────────────────────────────────────────────
 def fetch_epc(postcode: str, number: str) -> dict | None:
-    params = {"postcode": postcode, "size": 50}
+    params = {"postcode": postcode, "page_size": 50}
     if number:
         params["address"] = number
     try:
-        r = requests.get(EPC_API, params=params, headers=auth_header(), timeout=10)
+        r = requests.get(EPC_API, params=params, headers=epc_auth_header(), timeout=10)
         r.raise_for_status()
-        rows = r.json().get("rows", [])
-        return rows[0] if rows else None
+        records = r.json().get("data", [])
+        if not records:
+            return None
+        # If address filter applied, already filtered; else return first
+        return parse_epc_record(records[0])
     except Exception as e:
         st.warning(f"EPC API error: {e}")
         return None
 
-# ── EPC: all records for postcode → lookup dict keyed by normalised house number
+# ── EPC: all records for postcode → lookup dict keyed by house number ─────────
 def fetch_all_epc(postcode: str) -> dict:
     try:
         r = requests.get(EPC_API,
-                         params={"postcode": postcode, "size": 100},
-                         headers=auth_header(), timeout=10)
+                         params={"postcode": postcode, "page_size": 100},
+                         headers=epc_auth_header(), timeout=10)
         r.raise_for_status()
-        rows = r.json().get("rows", [])
+        records = r.json().get("data", [])
     except Exception:
         return {}
 
     lookup: dict = {}
-    for row in rows:
-        addr1 = (row.get("address1") or "").strip().upper()
+    for rec in records:
+        addr1 = (rec.get("addressLine1") or "").strip().upper()
         key = _extract_number_key(addr1)
         if key and key not in lookup:
             lookup[key] = {
-                "rating": (row.get("current-energy-rating") or "").upper(),
-                "score":  row.get("current-energy-efficiency", ""),
-                "area":   row.get("total-floor-area", ""),
+                "rating": (rec.get("currentEnergyEfficiencyBand") or "").upper(),
+                "area":   rec.get("totalFloorArea", ""),
             }
     return lookup
 
 def _extract_number_key(text: str) -> str:
-    """Return the first numeric/alphanumeric house-number token found in text."""
     for tok in text.split():
         clean = tok.rstrip(",")
         if clean.isdigit() or (len(clean) >= 2 and clean[:-1].isdigit() and clean[-1].isalpha()):
@@ -94,7 +113,6 @@ def _extract_number_key(text: str) -> str:
     return ""
 
 def paon_to_key(paon: str) -> str:
-    """Normalise a Land Registry PAON for EPC lookup."""
     return _extract_number_key(paon.strip().upper())
 
 # ── Land Registry ─────────────────────────────────────────────────────────────
@@ -202,7 +220,7 @@ if submitted:
         st.error("Please enter a postcode.")
         st.stop()
 
-    # ── EPC (single property) + full postcode EPC map ─────────────────────────
+    # ── EPC ───────────────────────────────────────────────────────────────────
     st.subheader("Energy Performance Certificate")
     with st.spinner("Fetching EPC data…"):
         epc     = fetch_epc(postcode, number)
@@ -217,7 +235,7 @@ if submitted:
         ptype  = epc.get("property-type", "—")
         bform  = epc.get("built-form", "—")
         tenure = epc.get("tenure", "—")
-        idate  = epc.get("lodgement-date") or epc.get("inspection-date", "—")
+        idate  = epc.get("lodgement-date", "—")
         addr   = ", ".join(filter(None, [
             epc.get("address1", ""), epc.get("address2", ""), epc.get("address3", "")
         ]))
@@ -243,7 +261,7 @@ if submitted:
 
     st.divider()
 
-    # ── Price paid history (this property) ────────────────────────────────────
+    # ── Price paid history ────────────────────────────────────────────────────
     st.subheader(f"Price paid history — {number+' ' if number else ''}{postcode}")
     with st.spinner("Fetching transaction history…"):
         hist_rows = fetch_history(postcode, number)
@@ -257,7 +275,7 @@ if submitted:
 
     st.divider()
 
-    # ── Area sales (last 5 years) with EPC columns ────────────────────────────
+    # ── Area sales ────────────────────────────────────────────────────────────
     st.subheader(f"Area sales — {postcode} (last 5 years)")
     with st.spinner("Fetching area sales…"):
         area_rows = fetch_area(postcode)
