@@ -60,7 +60,6 @@ def fetch_epc_detail(cert_number: str) -> dict | None:
         data = r.json().get("data", {})
         # Normalise to internal keys (new API uses snake_case in full record)
         return {
-            st.write(data),  # 臨時 debug
             "current-energy-rating":       (data.get("current_energy_efficiency_band") or "").upper(),
             "current-energy-efficiency":   str(data.get("current_energy_efficiency_rating", "") or ""),
             "potential-energy-rating":     (data.get("potential_energy_efficiency_band") or "").upper(),
