@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 from base64 import b64encode
 
 # ── Config ────────────────────────────────────────────────────────────────────
-EPC_EMAIL = "newsunny3156@gmail.com"
-EPC_KEY   = "de307eacaa9d463ed78c2525e3a17e450b42e79f"
+EPC_EMAIL = st.secrets["EPC_EMAIL"]
+EPC_KEY   = st.secrets["EPC_KEY"]
 EPC_API   = "https://epc.opendatacommunities.org/api/v1/domestic/search"
 LR_SPARQL = "https://landregistry.data.gov.uk/landregistry/query"
 
