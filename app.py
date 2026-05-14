@@ -218,8 +218,6 @@ if submitted:
         epc     = fetch_epc(postcode, number)
         epc_map = fetch_all_epc(postcode)
 
-    st.write("EPC map keys:", list(epc_map.keys()))  # temp debug
-
     if epc:
         d  = epc
         sr = epc.get("_search", {})
@@ -446,9 +444,24 @@ if submitted:
             st.line_chart(chart_df, y="Price (£)", use_container_width=True, height=220)
 
         # Add Area column from epc_map
-        df_area["Area (m²)"] = df_area.apply(
-            lambda row: epc_map.get(paon_to_key(row["Address"].split()[0]) if row["Address"] else "", {}).get("area", "—") or "—",
-            axis=1
+        # Try every numeric token in the address so flats (e.g. "FLAT 1 50 MANOR RD") match on "1" or "50"
+        def best_epc_match(address):
+            if not address:
+                return {}
+            tokens = address.upper().split()
+            for tok in tokens:
+                clean = tok.rstrip(",")
+                if clean.isdigit() or (len(clean) >= 2 and clean[:-1].isdigit() and clean[-1].isalpha()):
+                    key = clean.lstrip("0") or "0"
+                    info = epc_map.get(key, {})
+                    if info:
+                        return info
+            return {}
+        df_area["Area (m²)"] = df_area["Address"].apply(
+            lambda addr: best_epc_match(addr).get("area", "—") or "—"
+        )
+        df_area["EPC"] = df_area["Address"].apply(
+            lambda addr: best_epc_match(addr).get("rating", "—") or "—"
         )
         st.dataframe(df_area[["Date","Price","Address","Type","EPC","Area (m²)"]], use_container_width=True, hide_index=True)
 
