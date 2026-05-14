@@ -78,6 +78,7 @@ def fetch_epc(postcode: str, number: str) -> dict | None:
         if not records:
             return None
         # If address filter applied, already filtered; else return first
+        st.write(records[0])  # 臨時 debug
         return parse_epc_record(records[0])
     except Exception as e:
         st.warning(f"EPC API error: {e}")
