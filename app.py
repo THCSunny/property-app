@@ -48,13 +48,26 @@ def star(n):
     return "★"*n + "☆"*(5-n)
 
 # ── EPC fetch ─────────────────────────────────────────────────────────────────
+def _norm_num(s: str) -> str:
+    """Normalise a number string for comparison."""
+    return (s or "").strip().upper().lstrip("0") or "0"
+
+def _rec_numbers(rec: dict):
+    """Return set of candidate number keys from a search result record."""
+    nums = set()
+    for field in ("addressLine1", "addressLine2", "addressLine3", "addressLine4"):
+        val = (rec.get(field) or "").strip().upper()
+        k = _num_key(val)
+        if k:
+            nums.add(k)
+    return nums
+
 def _exact_match(rec: dict, number: str) -> bool:
     """Check if a search result exactly matches the house number."""
     if not number:
         return True
-    addr1 = (rec.get("addressLine1") or "").strip().upper()
-    key = _num_key(addr1)
-    return key == (number.strip().upper().lstrip("0") or "0")
+    target = _norm_num(number)
+    return target in _rec_numbers(rec)
 
 def fetch_epc(postcode, number):
     params = {"postcode": postcode, "page_size": 100}
@@ -63,7 +76,7 @@ def fetch_epc(postcode, number):
         r.raise_for_status()
         records = r.json().get("data", [])
         if not records: return None
-        # Exact match on house number
+        # Exact match on house number across all address lines
         if number:
             matched = [rec for rec in records if _exact_match(rec, number)]
             if matched:
@@ -88,24 +101,29 @@ def fetch_all_epc(postcode):
     except: return {}
     lookup = {}
     for rec in records:
-        addr1 = (rec.get("addressLine1") or "").strip().upper()
-        key = _num_key(addr1)
-        if key and key not in lookup:
-            # Fetch full certificate for floor area
-            area = ""
-            cert_num = rec.get("certificateNumber")
-            if cert_num:
-                try:
-                    r2 = requests.get(EPC_CERT_API,
-                                      params={"certificate_number": cert_num},
-                                      headers=epc_auth(), timeout=8)
-                    if r2.ok:
-                        area = str(r2.json().get("data", {}).get("total_floor_area", "") or "")
-                except: pass
-            lookup[key] = {
-                "rating": (rec.get("currentEnergyEfficiencyBand") or "").upper(),
-                "area": area,
-            }
+        # Build all candidate keys from all address lines (handles flats)
+        candidate_keys = _rec_numbers(rec)
+        if not candidate_keys:
+            continue
+        # Fetch full certificate for floor area
+        area = ""
+        cert_num = rec.get("certificateNumber")
+        if cert_num:
+            try:
+                r2 = requests.get(EPC_CERT_API,
+                                  params={"certificate_number": cert_num},
+                                  headers=epc_auth(), timeout=8)
+                if r2.ok:
+                    area = str(r2.json().get("data", {}).get("total_floor_area", "") or "")
+            except: pass
+        entry = {
+            "rating": (rec.get("currentEnergyEfficiencyBand") or "").upper(),
+            "area": area,
+        }
+        # Store under every candidate key so both "1" (flat) and "50" (house) match
+        for key in candidate_keys:
+            if key not in lookup:
+                lookup[key] = entry
     return lookup
 
 def _num_key(text):
