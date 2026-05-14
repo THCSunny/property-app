@@ -214,7 +214,12 @@ if submitted:
         ptype    = PROP_TYPE_MAP.get(d.get("property_type"), str(d.get("property_type","—")))
         idate    = d.get("inspection_date") or d.get("registration_date") or sr.get("registrationDate","—")
         addr1    = d.get("address_line_1") or sr.get("addressLine1","")
-        dwelling = d.get("dwelling_type","")
+        # dwelling_type may be a dict with 'value' key
+        dwelling_raw = d.get("dwelling_type","")
+        if isinstance(dwelling_raw, dict):
+            dwelling = dwelling_raw.get("value", "")
+        else:
+            dwelling = str(dwelling_raw) if dwelling_raw else ""
 
         co2_cur  = d.get("co2_emissions_current","")
         co2_pot  = d.get("co2_emissions_potential","")
@@ -227,33 +232,57 @@ if submitted:
         water_pot   = (d.get("hot_water_cost_potential") or {}).get("value","")
         light_pot   = (d.get("lighting_cost_potential") or {}).get("value","")
 
-        # Badge + headline
-        col_badge, col_info = st.columns([1,4])
-        with col_badge:
-            bg=EPC_COLORS.get(rating,"#aaa"); tc=EPC_TEXT.get(rating,"white")
-            st.markdown(f"""<div style='text-align:center;padding:1rem 0'>
-              <div class='epc-badge' style='background:{bg};color:{tc};margin:auto'>{rating}</div>
-              <div style='margin-top:6px;font-size:12px;color:#666'>Current rating</div>
-            </div>""", unsafe_allow_html=True)
-        with col_info:
-            m1,m2,m3,m4,m5 = st.columns(5)
-            m1.metric("Current score", f"{score}/100" if score else "—")
-            m2.metric("Potential", f"{pot_r} ({pot_s})" if pot_s else pot_r)
-            m3.metric("Floor area", f"{floor} m²" if floor else "—")
-            m4.metric("Tenure", tenure)
-            m5.metric("CO₂ now / potential", f"{co2_cur} / {co2_pot} t" if co2_cur else "—")
-            st.caption(f"**{addr1}** · {dwelling or ptype} · {built} · Inspected: {idate}")
+        # ── Hero card ─────────────────────────────────────────────────────────
+        bg = EPC_COLORS.get(rating, "#aaa")
+        tc = EPC_TEXT.get(rating, "white")
+        total_cur = sum(x for x in [heat_cost, water_cost, light_cost] if x != "")
+        total_pot = sum(x for x in [heat_pot, water_pot, light_pot] if x != "")
+        saving_str = f"£{total_cur - total_pot:,}/yr saving possible" if total_cur and total_pot else ""
+
+        st.markdown(f"""
+        <div style="border:1px solid #e0e0e0;border-radius:12px;padding:20px 24px;margin-bottom:16px;background:#fafafa">
+          <div style="display:flex;align-items:center;gap:20px;margin-bottom:16px">
+            <div style="width:64px;height:64px;border-radius:50%;background:{bg};color:{tc};
+                        display:flex;align-items:center;justify-content:center;
+                        font-size:28px;font-weight:700;flex-shrink:0">{rating}</div>
+            <div>
+              <div style="font-size:18px;font-weight:600;color:#111">{addr1}</div>
+              <div style="font-size:13px;color:#666;margin-top:2px">{dwelling or ptype} &nbsp;·&nbsp; {built} &nbsp;·&nbsp; {tenure} &nbsp;·&nbsp; Inspected: {idate}</div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px">
+            <div style="background:white;border:1px solid #eee;border-radius:8px;padding:10px;text-align:center">
+              <div style="font-size:11px;color:#888;margin-bottom:4px">Current score</div>
+              <div style="font-size:20px;font-weight:600">{score or "—"}<span style="font-size:12px;color:#999">/100</span></div>
+            </div>
+            <div style="background:white;border:1px solid #eee;border-radius:8px;padding:10px;text-align:center">
+              <div style="font-size:11px;color:#888;margin-bottom:4px">Potential</div>
+              <div style="font-size:20px;font-weight:600">{pot_r} <span style="font-size:14px;color:#555">({pot_s})</span></div>
+            </div>
+            <div style="background:white;border:1px solid #eee;border-radius:8px;padding:10px;text-align:center">
+              <div style="font-size:11px;color:#888;margin-bottom:4px">Floor area</div>
+              <div style="font-size:20px;font-weight:600">{floor or "—"}<span style="font-size:12px;color:#999"> m²</span></div>
+            </div>
+            <div style="background:white;border:1px solid #eee;border-radius:8px;padding:10px;text-align:center">
+              <div style="font-size:11px;color:#888;margin-bottom:4px">CO₂ now</div>
+              <div style="font-size:20px;font-weight:600">{co2_cur or "—"}<span style="font-size:12px;color:#999"> t</span></div>
+            </div>
+            <div style="background:white;border:1px solid #eee;border-radius:8px;padding:10px;text-align:center">
+              <div style="font-size:11px;color:#888;margin-bottom:4px">CO₂ potential</div>
+              <div style="font-size:20px;font-weight:600">{co2_pot or "—"}<span style="font-size:12px;color:#999"> t</span></div>
+            </div>
+            <div style="background:{"#f0fdf4" if saving_str else "white"};border:1px solid {"#86efac" if saving_str else "#eee"};border-radius:8px;padding:10px;text-align:center">
+              <div style="font-size:11px;color:#888;margin-bottom:4px">Annual saving</div>
+              <div style="font-size:14px;font-weight:600;color:{"#166534" if saving_str else "#999"}">{saving_str or "—"}</div>
+            </div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
         # Property details tabs
-        tab1, tab2, tab3, tab4 = st.tabs(["🏗 Property details", "💷 Running costs", "⚡ Energy use", "🔧 Improvements"])
+        tab1, tab2, tab3, tab4 = st.tabs(["🏗 Construction", "💷 Running costs", "⚡ Energy use", "🔧 Improvements"])
 
         with tab1:
-            r1,r2,r3,r4 = st.columns(4)
-            r1.metric("Property type", ptype)
-            r2.metric("Built form", built)
-            r3.metric("Tenure", tenure)
-            r4.metric("Floor area", f"{floor} m²" if floor else "—")
-
             walls   = d.get("walls",[{}])[0]
             roof    = d.get("roofs",[{}])[0]
             floor_d = d.get("floors",[{}])[0]
@@ -261,16 +290,15 @@ if submitted:
             heating = d.get("main_heating",[{}])[0]
             hotwater= d.get("hot_water",{})
 
-            st.markdown("**Construction & systems**")
-            rows = [
-                ("Walls",    walls.get("description","—"),    star(walls.get("energy_efficiency_rating",0))),
-                ("Roof",     roof.get("description","—"),     star(roof.get("energy_efficiency_rating",0))),
-                ("Floor",    floor_d.get("description","—"),  star(floor_d.get("energy_efficiency_rating",0))),
-                ("Windows",  window.get("description","—"),   star(window.get("energy_efficiency_rating",0))),
-                ("Heating",  heating.get("description","—"),  star(heating.get("energy_efficiency_rating",0))),
-                ("Hot water",hotwater.get("description","—"), star(hotwater.get("energy_efficiency_rating",0))),
+            const_rows = [
+                ("Walls",     walls.get("description","—"),    star(walls.get("energy_efficiency_rating",0))),
+                ("Roof",      roof.get("description","—"),     star(roof.get("energy_efficiency_rating",0))),
+                ("Floor",     floor_d.get("description","—"),  star(floor_d.get("energy_efficiency_rating",0))),
+                ("Windows",   window.get("description","—"),   star(window.get("energy_efficiency_rating",0))),
+                ("Heating",   heating.get("description","—"),  star(heating.get("energy_efficiency_rating",0))),
+                ("Hot water", hotwater.get("description","—"), star(hotwater.get("energy_efficiency_rating",0))),
             ]
-            df_const = pd.DataFrame(rows, columns=["Element","Description","Efficiency"])
+            df_const = pd.DataFrame(const_rows, columns=["Element","Description","Efficiency (/5)"])
             st.dataframe(df_const, use_container_width=True, hide_index=True)
 
         with tab2:
