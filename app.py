@@ -48,20 +48,32 @@ def star(n):
     return "★"*n + "☆"*(5-n)
 
 # ── EPC fetch ─────────────────────────────────────────────────────────────────
+def _exact_match(rec: dict, number: str) -> bool:
+    """Check if a search result exactly matches the house number."""
+    if not number:
+        return True
+    addr1 = (rec.get("addressLine1") or "").strip().upper()
+    key = _num_key(addr1)
+    return key == (number.strip().upper().lstrip("0") or "0")
+
 def fetch_epc(postcode, number):
-    params = {"postcode": postcode, "page_size": 50}
-    if number: params["address"] = number
+    params = {"postcode": postcode, "page_size": 100}
     try:
         r = requests.get(EPC_API, params=params, headers=epc_auth(), timeout=10)
         r.raise_for_status()
         records = r.json().get("data", [])
         if not records: return None
+        # Exact match on house number
+        if number:
+            matched = [rec for rec in records if _exact_match(rec, number)]
+            if matched:
+                records = matched
         cert_num = records[0].get("certificateNumber")
         if cert_num:
             r2 = requests.get(EPC_CERT_API, params={"certificate_number": cert_num}, headers=epc_auth(), timeout=10)
             if r2.ok:
                 d = r2.json().get("data", {})
-                d["_search"] = records[0]  # attach search result for fallback fields
+                d["_search"] = records[0]
                 return d
         return {"_search": records[0]}
     except Exception as e:
@@ -79,7 +91,21 @@ def fetch_all_epc(postcode):
         addr1 = (rec.get("addressLine1") or "").strip().upper()
         key = _num_key(addr1)
         if key and key not in lookup:
-            lookup[key] = {"rating":(rec.get("currentEnergyEfficiencyBand") or "").upper()}
+            # Fetch full certificate for floor area
+            area = ""
+            cert_num = rec.get("certificateNumber")
+            if cert_num:
+                try:
+                    r2 = requests.get(EPC_CERT_API,
+                                      params={"certificate_number": cert_num},
+                                      headers=epc_auth(), timeout=8)
+                    if r2.ok:
+                        area = str(r2.json().get("data", {}).get("total_floor_area", "") or "")
+                except: pass
+            lookup[key] = {
+                "rating": (rec.get("currentEnergyEfficiencyBand") or "").upper(),
+                "area": area,
+            }
     return lookup
 
 def _num_key(text):
@@ -336,7 +362,12 @@ if submitted:
             chart_df = chart_df.dropna().sort_values("Date").set_index("Date")
             st.line_chart(chart_df, y="Price (£)", use_container_width=True, height=220)
 
-        st.dataframe(df_area[["Date","Price","Address","Type","EPC"]], use_container_width=True, hide_index=True)
+        # Add Area column from epc_map
+        df_area["Area (m²)"] = df_area.apply(
+            lambda row: epc_map.get(paon_to_key(row["Address"].split()[0]) if row["Address"] else "", {}).get("area", "—") or "—",
+            axis=1
+        )
+        st.dataframe(df_area[["Date","Price","Address","Type","EPC","Area (m²)"]], use_container_width=True, hide_index=True)
 
         matched = (df_area["EPC"] != "—").sum()
         if matched < len(df_area):
