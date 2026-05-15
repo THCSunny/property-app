@@ -377,14 +377,20 @@ if submitted:
                 st.success(f"Potential annual saving if all improvements made: **£{total_saving:,}**")
 
         with tab3:
-            e1,e2,e3,e4 = st.columns(4)
-            e1.metric("Energy use now", f"{energy_cur} kWh/m²" if energy_cur else "—")
-            e2.metric("Energy use potential", f"{energy_pot} kWh/m²" if energy_pot else "—")
-            e3.metric("CO₂ now", f"{co2_cur} tonnes" if co2_cur else "—")
-            e4.metric("CO₂ potential", f"{co2_pot} tonnes" if co2_pot else "—")
             avg = d.get("energy_rating_average","")
-            if avg:
-                st.info(f"UK average energy score: **{avg}/100** — this property scores **{score}/100**")
+            st.markdown(f"""
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+              <div style="background:#f8f9fa;border-radius:8px;padding:14px 16px">
+                <div style="font-size:11px;color:#888;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.05em">Energy use now</div>
+                <div style="font-size:22px;font-weight:600">{energy_cur or "—"}<span style="font-size:13px;color:#999;margin-left:4px">kWh/m²</span></div>
+              </div>
+              <div style="background:#f0fdf4;border-radius:8px;padding:14px 16px">
+                <div style="font-size:11px;color:#888;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.05em">Potential</div>
+                <div style="font-size:22px;font-weight:600;color:#166534">{energy_pot or "—"}<span style="font-size:13px;color:#888;margin-left:4px">kWh/m²</span></div>
+              </div>
+            </div>
+            {"<div style='background:#eff6ff;border-radius:8px;padding:12px 16px;font-size:13px;color:#1e40af'>UK average energy score: <strong>" + str(avg) + "/100</strong> — this property scores <strong>" + str(score) + "/100</strong></div>" if avg else ""}
+            """, unsafe_allow_html=True)
 
         with tab4:
             improvements = d.get("suggested_improvements", [])
