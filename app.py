@@ -69,6 +69,7 @@ def _exact_match(rec: dict, number: str) -> bool:
     target = _norm_num(number)
     return target in _rec_numbers(rec)
 
+@st.cache_data(ttl=3600)
 def fetch_epc(postcode, number):
     params = {"postcode": postcode, "page_size": 100}
     try:
@@ -93,6 +94,7 @@ def fetch_epc(postcode, number):
         st.warning(f"EPC API error: {e}")
         return None
 
+@st.cache_data(ttl=3600)  # Cache for 1 hour per postcode
 def fetch_all_epc(postcode):
     try:
         r = requests.get(EPC_API, params={"postcode":postcode,"page_size":100}, headers=epc_auth(), timeout=10)
