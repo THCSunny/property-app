@@ -268,7 +268,7 @@ if submitted:
               <div style="font-size:13px;color:#666;margin-top:2px">{dwelling or ptype} &nbsp;·&nbsp; {built} &nbsp;·&nbsp; {tenure} &nbsp;·&nbsp; Inspected: {idate}</div>
             </div>
           </div>
-          <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px">
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
             <div style="background:white;border:1px solid #eee;border-radius:8px;padding:10px;text-align:center">
               <div style="font-size:11px;color:#888;margin-bottom:4px">Current score</div>
               <div style="font-size:20px;font-weight:600">{score or "—"}<span style="font-size:12px;color:#999">/100</span></div>
@@ -280,14 +280,6 @@ if submitted:
             <div style="background:white;border:1px solid #eee;border-radius:8px;padding:10px;text-align:center">
               <div style="font-size:11px;color:#888;margin-bottom:4px">Floor area</div>
               <div style="font-size:20px;font-weight:600">{floor or "—"}<span style="font-size:12px;color:#999"> m²</span></div>
-            </div>
-            <div style="background:white;border:1px solid #eee;border-radius:8px;padding:10px;text-align:center">
-              <div style="font-size:11px;color:#888;margin-bottom:4px">CO₂ now</div>
-              <div style="font-size:20px;font-weight:600">{co2_cur or "—"}<span style="font-size:12px;color:#999"> t</span></div>
-            </div>
-            <div style="background:white;border:1px solid #eee;border-radius:8px;padding:10px;text-align:center">
-              <div style="font-size:11px;color:#888;margin-bottom:4px">CO₂ potential</div>
-              <div style="font-size:20px;font-weight:600">{co2_pot or "—"}<span style="font-size:12px;color:#999"> t</span></div>
             </div>
             <div style="background:{"#f0fdf4" if saving_str else "white"};border:1px solid {"#86efac" if saving_str else "#eee"};border-radius:8px;padding:10px;text-align:center">
               <div style="font-size:11px;color:#888;margin-bottom:4px">Annual saving</div>
