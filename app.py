@@ -480,31 +480,13 @@ if submitted:
         mkt1, mkt2, mkt3 = st.tabs(["📈 Price trends", "💷 Price per m²", "📊 Sales volume"])
 
         with mkt1:
-            if len(df_area) >= 3:
-                # All types combined
-                chart_all = df_area[["Date_dt","Price (£)"]].dropna().sort_values("Date_dt").set_index("Date_dt")
-                st.markdown("**All property types**")
-                st.line_chart(chart_all, y="Price (£)", use_container_width=True, height=200)
-
-                # By property type
-                types_available = df_area["Type"].unique()
-                if len(types_available) > 1:
-                    st.markdown("**By property type**")
-                    type_pivot = df_area.dropna(subset=["Date_dt"]).copy()
-                    type_pivot = type_pivot.sort_values("Date_dt")
-                    # Build a pivot: one column per type, index = date
-                    pivot = type_pivot.pivot_table(
-                        index="Date_dt", columns="Type", values="Price (£)", aggfunc="mean"
-                    )
-                    st.line_chart(pivot, use_container_width=True, height=220)
-
-                    # Summary by type
-                    type_summary = df_area.groupby("Type")["Price (£)"].agg(
-                        Count="count", Average="mean", Median="median"
-                    ).reset_index()
-                    type_summary["Average"] = type_summary["Average"].apply(fmt_price)
-                    type_summary["Median"]  = type_summary["Median"].apply(fmt_price)
-                    st.dataframe(type_summary, use_container_width=True, hide_index=True)
+            # Summary by type
+            type_summary = df_area.groupby("Type")["Price (£)"].agg(
+                Count="count", Average="mean", Median="median"
+            ).reset_index()
+            type_summary["Average"] = type_summary["Average"].apply(fmt_price)
+            type_summary["Median"]  = type_summary["Median"].apply(fmt_price)
+            st.dataframe(type_summary, use_container_width=True, hide_index=True)
 
         with mkt2:
             ppm2_data = df_area[df_area["£/m²"].notna()]
@@ -520,9 +502,6 @@ if submitted:
                 p3.metric("Median £/m²",  f"£{med_ppm2:,}")
                 p4.metric("Range £/m²",   f"£{min_ppm2:,} – £{max_ppm2:,}")
 
-                chart_ppm2 = ppm2_data[["Date_dt","£/m²"]].dropna().sort_values("Date_dt").set_index("Date_dt")
-                st.line_chart(chart_ppm2, y="£/m²", use_container_width=True, height=200)
-
                 # By type
                 if df_area["Type"].nunique() > 1:
                     st.markdown("**£/m² by property type**")
@@ -537,17 +516,18 @@ if submitted:
 
         with mkt3:
             if df_area["Year"].notna().sum() > 0:
-                vol_by_year = df_area.groupby("Year").size().reset_index(name="Sales")
+                # Sales volume by year
+                vol_by_year = df_area.groupby("Year").size().reset_index(name="Total Sales")
                 vol_by_year["Year"] = vol_by_year["Year"].astype(str)
-                st.bar_chart(vol_by_year.set_index("Year"), y="Sales", use_container_width=True, height=220)
 
-                # By type per year
                 if df_area["Type"].nunique() > 1:
-                    st.markdown("**Sales by type per year**")
                     vol_type = df_area.groupby(["Year","Type"]).size().reset_index(name="Sales")
-                    vol_pivot = vol_type.pivot_table(index="Year", columns="Type", values="Sales", fill_value=0)
-                    vol_pivot.index = vol_pivot.index.astype(str)
-                    st.bar_chart(vol_pivot, use_container_width=True, height=220)
+                    vol_pivot = vol_type.pivot_table(index="Year", columns="Type", values="Sales", fill_value=0).reset_index()
+                    vol_pivot["Year"] = vol_pivot["Year"].astype(str)
+                    vol_pivot["Total"] = vol_pivot.drop(columns="Year").sum(axis=1)
+                    st.dataframe(vol_pivot, use_container_width=True, hide_index=True)
+                else:
+                    st.dataframe(vol_by_year, use_container_width=True, hide_index=True)
 
         # ── Full transactions table ───────────────────────────────────────────
         st.markdown("**All transactions**")
