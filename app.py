@@ -429,22 +429,8 @@ if submitted:
 
     if area_rows:
         df_area = rows_to_df(area_rows, epc_map=epc_map)
-        prices  = df_area["Price (£)"].dropna()
 
-        c1,c2,c3,c4 = st.columns(4)
-        c1.metric("Total sales", len(prices))
-        c2.metric("Average",  fmt_price(prices.mean()))
-        c3.metric("Median",   fmt_price(prices.median()))
-        c4.metric("Range",    f"{fmt_price(prices.min())} – {fmt_price(prices.max())}")
-
-        if len(df_area) >= 3:
-            chart_df = df_area[["Date","Price (£)"]].copy()
-            chart_df["Date"] = pd.to_datetime(chart_df["Date"], errors="coerce")
-            chart_df = chart_df.dropna().sort_values("Date").set_index("Date")
-            st.line_chart(chart_df, y="Price (£)", use_container_width=True, height=220)
-
-        # Add Area column from epc_map
-        # Try every numeric token in the address so flats (e.g. "FLAT 1 50 MANOR RD") match on "1" or "50"
+        # EPC + Area matching
         def best_epc_match(address):
             if not address:
                 return {}
@@ -457,16 +443,121 @@ if submitted:
                     if info:
                         return info
             return {}
+
         df_area["Area (m²)"] = df_area["Address"].apply(
             lambda addr: best_epc_match(addr).get("area", "—") or "—"
         )
         df_area["EPC"] = df_area["Address"].apply(
             lambda addr: best_epc_match(addr).get("rating", "—") or "—"
         )
-        st.dataframe(df_area[["Date","Price","Address","Type","EPC","Area (m²)"]], use_container_width=True, hide_index=True)
+
+        # £/m² column
+        def calc_price_per_m2(row):
+            try:
+                area = float(row["Area (m²)"])
+                price = float(row["Price (£)"])
+                if area > 0:
+                    return round(price / area)
+            except:
+                pass
+            return None
+        df_area["£/m²"] = df_area.apply(calc_price_per_m2, axis=1)
+
+        # Date for charting
+        df_area["Date_dt"] = pd.to_datetime(df_area["Date"], errors="coerce")
+        df_area["Year"] = df_area["Date_dt"].dt.year
+
+        prices = df_area["Price (£)"].dropna()
+
+        # ── Summary stats ─────────────────────────────────────────────────────
+        c1,c2,c3,c4 = st.columns(4)
+        c1.metric("Total sales", len(prices))
+        c2.metric("Average",  fmt_price(prices.mean()))
+        c3.metric("Median",   fmt_price(prices.median()))
+        c4.metric("Range",    f"{fmt_price(prices.min())} – {fmt_price(prices.max())}")
+
+        # ── Market analysis tabs ──────────────────────────────────────────────
+        mkt1, mkt2, mkt3 = st.tabs(["📈 Price trends", "💷 Price per m²", "📊 Sales volume"])
+
+        with mkt1:
+            if len(df_area) >= 3:
+                # All types combined
+                chart_all = df_area[["Date_dt","Price (£)"]].dropna().sort_values("Date_dt").set_index("Date_dt")
+                st.markdown("**All property types**")
+                st.line_chart(chart_all, y="Price (£)", use_container_width=True, height=200)
+
+                # By property type
+                types_available = df_area["Type"].unique()
+                if len(types_available) > 1:
+                    st.markdown("**By property type**")
+                    type_pivot = df_area.dropna(subset=["Date_dt"]).copy()
+                    type_pivot = type_pivot.sort_values("Date_dt")
+                    # Build a pivot: one column per type, index = date
+                    pivot = type_pivot.pivot_table(
+                        index="Date_dt", columns="Type", values="Price (£)", aggfunc="mean"
+                    )
+                    st.line_chart(pivot, use_container_width=True, height=220)
+
+                    # Summary by type
+                    type_summary = df_area.groupby("Type")["Price (£)"].agg(
+                        Count="count", Average="mean", Median="median"
+                    ).reset_index()
+                    type_summary["Average"] = type_summary["Average"].apply(fmt_price)
+                    type_summary["Median"]  = type_summary["Median"].apply(fmt_price)
+                    st.dataframe(type_summary, use_container_width=True, hide_index=True)
+
+        with mkt2:
+            ppm2_data = df_area[df_area["£/m²"].notna()]
+            if len(ppm2_data) >= 2:
+                avg_ppm2 = round(ppm2_data["£/m²"].mean())
+                med_ppm2 = round(ppm2_data["£/m²"].median())
+                min_ppm2 = round(ppm2_data["£/m²"].min())
+                max_ppm2 = round(ppm2_data["£/m²"].max())
+
+                p1,p2,p3,p4 = st.columns(4)
+                p1.metric("Matched properties", len(ppm2_data))
+                p2.metric("Average £/m²", f"£{avg_ppm2:,}")
+                p3.metric("Median £/m²",  f"£{med_ppm2:,}")
+                p4.metric("Range £/m²",   f"£{min_ppm2:,} – £{max_ppm2:,}")
+
+                chart_ppm2 = ppm2_data[["Date_dt","£/m²"]].dropna().sort_values("Date_dt").set_index("Date_dt")
+                st.line_chart(chart_ppm2, y="£/m²", use_container_width=True, height=200)
+
+                # By type
+                if df_area["Type"].nunique() > 1:
+                    st.markdown("**£/m² by property type**")
+                    type_ppm2 = ppm2_data.groupby("Type")["£/m²"].agg(
+                        Count="count", Average="mean", Median="median"
+                    ).reset_index()
+                    type_ppm2["Average"] = type_ppm2["Average"].apply(lambda x: f"£{round(x):,}")
+                    type_ppm2["Median"]  = type_ppm2["Median"].apply(lambda x: f"£{round(x):,}")
+                    st.dataframe(type_ppm2, use_container_width=True, hide_index=True)
+            else:
+                st.info("Not enough EPC area data to calculate £/m². EPC records need to be available for at least 2 properties.")
+
+        with mkt3:
+            if df_area["Year"].notna().sum() > 0:
+                vol_by_year = df_area.groupby("Year").size().reset_index(name="Sales")
+                vol_by_year["Year"] = vol_by_year["Year"].astype(str)
+                st.bar_chart(vol_by_year.set_index("Year"), y="Sales", use_container_width=True, height=220)
+
+                # By type per year
+                if df_area["Type"].nunique() > 1:
+                    st.markdown("**Sales by type per year**")
+                    vol_type = df_area.groupby(["Year","Type"]).size().reset_index(name="Sales")
+                    vol_pivot = vol_type.pivot_table(index="Year", columns="Type", values="Sales", fill_value=0)
+                    vol_pivot.index = vol_pivot.index.astype(str)
+                    st.bar_chart(vol_pivot, use_container_width=True, height=220)
+
+        # ── Full transactions table ───────────────────────────────────────────
+        st.markdown("**All transactions**")
+        display_cols = ["Date","Price","Address","Type","EPC","Area (m²)","£/m²"]
+        df_display = df_area[display_cols].copy()
+        df_display["£/m²"] = df_display["£/m²"].apply(lambda x: f"£{int(x):,}" if pd.notna(x) else "—")
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
 
         matched = (df_area["EPC"] != "—").sum()
         if matched < len(df_area):
-            st.caption(f"EPC matched for {matched}/{len(df_area)} properties.")
+            st.caption(f"EPC matched for {matched}/{len(df_area)} properties. £/m² only shown where EPC area data is available.")
     else:
         st.info("No sales found in this postcode in the last 5 years.")
