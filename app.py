@@ -547,6 +547,19 @@ if submitted:
                 else:
                     st.dataframe(vol_by_year, use_container_width=True, hide_index=True)
 
+        # Debug: show raw address and matched EPC key
+        debug_rows = []
+        for _, row in df_area.iterrows():
+            addr = row["Address"]
+            tokens = addr.upper().split() if addr else []
+            num_toks = [t.rstrip(",").lstrip("0") or "0" for t in tokens
+                        if t.rstrip(",").isdigit() or (len(t.rstrip(","))>=2 and t.rstrip(",")[:-1].isdigit() and t.rstrip(",")[-1].isalpha())]
+            first_word = tokens[0].rstrip(",") if tokens else ""
+            is_flat = not (first_word.isdigit() or (len(first_word)>=2 and first_word[:-1].isdigit() and first_word[-1].isalpha()))
+            matched_key = next((k for k in num_toks if k in epc_map), None) if is_flat else (num_toks[0] if num_toks else None)
+            debug_rows.append({"Address": addr, "Numeric tokens": str(num_toks), "Is flat": is_flat, "Matched key": matched_key, "EPC area": epc_map.get(matched_key, {}).get("area","—") if matched_key else "—"})
+        st.write(pd.DataFrame(debug_rows))
+
         # ── Full transactions table ───────────────────────────────────────────
         st.markdown("**All transactions**")
         display_cols = ["Date","Price","Address","Type","EPC","Area (m²)","£/m²"]
