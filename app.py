@@ -101,14 +101,14 @@ def fetch_all_epc(postcode):
         r.raise_for_status()
         records = r.json().get("data",[])
     except: return {}
-    lookup = {}
+    # Store all entries per key, then pick the one with largest floor area
+    # This handles cases where a house has multiple EPC records (e.g. subdivided units)
+    raw: dict = {}
     for rec in records:
-        # Build all candidate keys from all address lines (handles flats)
         candidate_keys = _rec_numbers(rec)
         if not candidate_keys:
             continue
-        # Fetch full certificate for floor area
-        area = ""
+        area_val = ""
         cert_num = rec.get("certificateNumber")
         if cert_num:
             try:
@@ -116,16 +116,24 @@ def fetch_all_epc(postcode):
                                   params={"certificate_number": cert_num},
                                   headers=epc_auth(), timeout=8)
                 if r2.ok:
-                    area = str(r2.json().get("data", {}).get("total_floor_area", "") or "")
+                    area_val = str(r2.json().get("data", {}).get("total_floor_area", "") or "")
             except: pass
         entry = {
             "rating": (rec.get("currentEnergyEfficiencyBand") or "").upper(),
-            "area": area,
+            "area": area_val,
         }
-        # Store under every candidate key so both "1" (flat) and "50" (house) match
         for key in candidate_keys:
-            if key not in lookup:
-                lookup[key] = entry
+            if key not in raw:
+                raw[key] = []
+            raw[key].append(entry)
+
+    # For each key, pick the record with the largest floor area
+    lookup = {}
+    for key, entries in raw.items():
+        def area_num(e):
+            try: return float(e["area"])
+            except: return 0
+        lookup[key] = max(entries, key=area_num)
     return lookup
 
 def _num_key(text):
@@ -546,19 +554,6 @@ if submitted:
                     st.dataframe(vol_pivot, use_container_width=True, hide_index=True)
                 else:
                     st.dataframe(vol_by_year, use_container_width=True, hide_index=True)
-
-        # Debug: show raw address and matched EPC key
-        debug_rows = []
-        for _, row in df_area.iterrows():
-            addr = row["Address"]
-            tokens = addr.upper().split() if addr else []
-            num_toks = [t.rstrip(",").lstrip("0") or "0" for t in tokens
-                        if t.rstrip(",").isdigit() or (len(t.rstrip(","))>=2 and t.rstrip(",")[:-1].isdigit() and t.rstrip(",")[-1].isalpha())]
-            first_word = tokens[0].rstrip(",") if tokens else ""
-            is_flat = not (first_word.isdigit() or (len(first_word)>=2 and first_word[:-1].isdigit() and first_word[-1].isalpha()))
-            matched_key = next((k for k in num_toks if k in epc_map), None) if is_flat else (num_toks[0] if num_toks else None)
-            debug_rows.append({"Address": addr, "Numeric tokens": str(num_toks), "Is flat": is_flat, "Matched key": matched_key, "EPC area": epc_map.get(matched_key, {}).get("area","—") if matched_key else "—"})
-        st.write(pd.DataFrame(debug_rows))
 
         # ── Full transactions table ───────────────────────────────────────────
         st.markdown("**All transactions**")
