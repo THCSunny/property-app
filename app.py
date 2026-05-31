@@ -432,17 +432,35 @@ if submitted:
 
         # EPC + Area matching
         def best_epc_match(address):
+            """Match EPC data by house number.
+            For normal addresses (e.g. '84 GUY ROAD'), only try the first numeric token.
+            For flat addresses (e.g. 'FLAT 1 50 MANOR ROAD'), try both flat number and house number.
+            Never fall through to unrelated numbers in the street name."""
             if not address:
                 return {}
             tokens = address.upper().split()
+            numeric_tokens = []
             for tok in tokens:
                 clean = tok.rstrip(",")
                 if clean.isdigit() or (len(clean) >= 2 and clean[:-1].isdigit() and clean[-1].isalpha()):
-                    key = clean.lstrip("0") or "0"
+                    numeric_tokens.append(clean.lstrip("0") or "0")
+
+            if not numeric_tokens:
+                return {}
+
+            # If starts with non-numeric word (e.g. "FLAT"), it is a flat — try all numeric tokens
+            first_word = tokens[0].rstrip(",")
+            is_flat = not (first_word.isdigit() or (len(first_word) >= 2 and first_word[:-1].isdigit() and first_word[-1].isalpha()))
+
+            if is_flat:
+                for key in numeric_tokens:
                     info = epc_map.get(key, {})
                     if info:
                         return info
-            return {}
+                return {}
+            else:
+                # Normal address — only try the first (house) number, never fall through
+                return epc_map.get(numeric_tokens[0], {})
 
         df_area["Area (m²)"] = df_area["Address"].apply(
             lambda addr: best_epc_match(addr).get("area", "—") or "—"
