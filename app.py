@@ -1,5 +1,7 @@
 import streamlit as st
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import pandas as pd
 from datetime import datetime, timedelta
 
@@ -8,6 +10,15 @@ EPC_TOKEN = st.secrets["EPC_TOKEN"]
 EPC_API      = "https://api.get-energy-performance-data.communities.gov.uk/api/domestic/search"
 EPC_CERT_API = "https://api.get-energy-performance-data.communities.gov.uk/api/certificate"
 LR_SPARQL    = "https://landregistry.data.gov.uk/landregistry/query"
+
+# Session with automatic retry on transient errors
+def _make_session():
+    s = requests.Session()
+    retry = Retry(total=3, backoff_factor=1,
+                  status_forcelist=[429, 500, 502, 503, 504])
+    s.mount("https://", HTTPAdapter(max_retries=retry))
+    return s
+_session = _make_session()
 
 st.set_page_config(page_title="UK Property Lookup", page_icon="🏠", layout="wide")
 
@@ -73,7 +84,7 @@ def _exact_match(rec: dict, number: str) -> bool:
 def fetch_epc(postcode, number):
     params = {"postcode": postcode, "page_size": 100}
     try:
-        r = requests.get(EPC_API, params=params, headers=epc_auth(), timeout=10)
+        r = _session.get(EPC_API, params=params, headers=epc_auth(), timeout=20)
         r.raise_for_status()
         records = r.json().get("data", [])
         if not records: return None
@@ -84,7 +95,7 @@ def fetch_epc(postcode, number):
                 records = matched
         cert_num = records[0].get("certificateNumber")
         if cert_num:
-            r2 = requests.get(EPC_CERT_API, params={"certificate_number": cert_num}, headers=epc_auth(), timeout=10)
+            r2 = _session.get(EPC_CERT_API, params={"certificate_number": cert_num}, headers=epc_auth(), timeout=20)
             if r2.ok:
                 d = r2.json().get("data", {})
                 d["_search"] = records[0]
@@ -97,7 +108,7 @@ def fetch_epc(postcode, number):
 @st.cache_data(ttl=3600)  # Cache for 1 hour per postcode
 def fetch_all_epc(postcode):
     try:
-        r = requests.get(EPC_API, params={"postcode":postcode,"page_size":100}, headers=epc_auth(), timeout=10)
+        r = _session.get(EPC_API, params={"postcode":postcode,"page_size":100}, headers=epc_auth(), timeout=20)
         r.raise_for_status()
         records = r.json().get("data",[])
     except: return {}
@@ -112,9 +123,9 @@ def fetch_all_epc(postcode):
         cert_num = rec.get("certificateNumber")
         if cert_num:
             try:
-                r2 = requests.get(EPC_CERT_API,
-                                  params={"certificate_number": cert_num},
-                                  headers=epc_auth(), timeout=8)
+                r2 = _session.get(EPC_CERT_API,
+                                   params={"certificate_number": cert_num},
+                                   headers=epc_auth(), timeout=20)
                 if r2.ok:
                     area_val = str(r2.json().get("data", {}).get("total_floor_area", "") or "")
             except: pass
@@ -148,7 +159,7 @@ def paon_to_key(paon): return _num_key(paon.strip().upper())
 # ── Land Registry ─────────────────────────────────────────────────────────────
 def run_sparql(query):
     try:
-        r = requests.get(LR_SPARQL, params={"query":query,"output":"json"},
+        r = _session.get(LR_SPARQL, params={"query":query,"output":"json"},
                          headers={"Accept":"application/sparql-results+json",
                                   "User-Agent":"Mozilla/5.0 Chrome/120.0.0.0"},
                          timeout=15)
@@ -208,6 +219,46 @@ def rows_to_df(rows, epc_map=None):
 # ── UI ────────────────────────────────────────────────────────────────────────
 st.title("🏠 UK Property Research")
 st.caption("EPC energy ratings · Land Registry price paid · Area sales")
+
+with st.expander("🔧 API health check", expanded=False):
+    if st.button("Run API test"):
+        import time
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("**EPC API**")
+            t0 = time.time()
+            try:
+                r = _session.get(EPC_API,
+                                 params={"postcode": "SM6 9LD", "page_size": 1},
+                                 headers=epc_auth(), timeout=20)
+                elapsed = round(time.time() - t0, 2)
+                if r.ok:
+                    count = len(r.json().get("data", []))
+                    st.success(f"✅ OK — {r.status_code} — {elapsed}s — {count} record(s)")
+                else:
+                    st.error(f"❌ {r.status_code} — {elapsed}s")
+            except Exception as e:
+                elapsed = round(time.time() - t0, 2)
+                st.error(f"❌ Error after {elapsed}s: {e}")
+
+        with col2:
+            st.markdown("**Land Registry SPARQL**")
+            t0 = time.time()
+            try:
+                r = _session.get(LR_SPARQL,
+                                 params={"query": "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1", "output": "json"},
+                                 headers={"Accept": "application/sparql-results+json",
+                                          "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0"},
+                                 timeout=15)
+                elapsed = round(time.time() - t0, 2)
+                if r.ok:
+                    st.success(f"✅ OK — {r.status_code} — {elapsed}s")
+                else:
+                    st.error(f"❌ {r.status_code} — {elapsed}s")
+            except Exception as e:
+                elapsed = round(time.time() - t0, 2)
+                st.error(f"❌ Error after {elapsed}s: {e}")
 
 with st.form("search_form"):
     c1,c2,c3=st.columns([2,2,1])
