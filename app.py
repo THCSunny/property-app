@@ -166,50 +166,93 @@ LR_HEADERS = {
     "Origin": "https://landregistry.data.gov.uk",
 }
 
+LR_REST = "https://landregistry.data.gov.uk/data/ppi/transaction-record.json"
+
+def _sparql_raw(query):
+    """Try SPARQL endpoint via GET then POST. Returns bindings or raises."""
+    r = _session.get(LR_SPARQL, params={"query": query, "output": "json"},
+                     headers=LR_HEADERS, timeout=15)
+    if r.status_code == 403:
+        r = _session.post(LR_SPARQL,
+                          data={"query": query, "output": "json"},
+                          headers={**LR_HEADERS,
+                                   "Content-Type": "application/x-www-form-urlencoded"},
+                          timeout=15)
+    r.raise_for_status()
+    return [{k: v["value"] for k, v in b.items()} for b in r.json()["results"]["bindings"]]
+
+def fetch_lr_rest(postcode, min_date=None):
+    """Fallback: Land Registry Linked Data REST API. Returns rows in same format as SPARQL."""
+    params = {
+        "propertyAddress.postcode": postcode,
+        "_pageSize": 200,
+        "_sort": "-transactionDate",
+    }
+    if min_date:
+        params["min-transactionDate"] = min_date
+    r = _session.get(LR_REST, params=params, headers=LR_HEADERS, timeout=20)
+    r.raise_for_status()
+    items = r.json().get("result", {}).get("items", [])
+    rows = []
+    for it in items:
+        addr = it.get("propertyAddress", {})
+        ptype = it.get("propertyType", {})
+        ptype_val = ptype.get("_about", "") if isinstance(ptype, dict) else str(ptype)
+        date_val = it.get("transactionDate", "")
+        if isinstance(date_val, dict):
+            date_val = date_val.get("_value", "")
+        rows.append({
+            "date":   date_val,
+            "price":  str(it.get("pricePaid", "")),
+            "paon":   str(addr.get("paon", "")),
+            "saon":   str(addr.get("saon", "")),
+            "street": str(addr.get("street", "")),
+            "type":   ptype_val,
+        })
+    return rows
+
 def run_sparql(query):
-    # Try GET first, then POST as fallback (different WAF rules may apply)
     try:
-        r = _session.get(LR_SPARQL, params={"query": query, "output": "json"},
-                         headers=LR_HEADERS, timeout=15)
-        if r.status_code == 403:
-            # Fallback: POST with form-encoded body
-            r = _session.post(LR_SPARQL,
-                              data={"query": query, "output": "json"},
-                              headers={**LR_HEADERS,
-                                       "Content-Type": "application/x-www-form-urlencoded"},
-                              timeout=15)
-        r.raise_for_status()
-        return [{k: v["value"] for k, v in b.items()} for b in r.json()["results"]["bindings"]]
+        return _sparql_raw(query)
     except Exception as e:
         st.warning(f"Land Registry error: {e}"); return []
 
-def fetch_history(postcode, number):
-    nf = f'FILTER(LCASE(REPLACE(STR(?paon)," ",""))=LCASE(REPLACE("{number}"," ","")))' if number else ""
-    return run_sparql(f"""
-PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
-PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
-SELECT ?date ?price ?paon ?saon ?street ?type WHERE {{
-  ?t lrppi:propertyAddress ?addr ; lrppi:pricePaid ?price ;
-     lrppi:transactionDate ?date ; lrppi:propertyType ?type .
-  ?addr lrcommon:postcode "{postcode}" .
-  OPTIONAL {{?addr lrcommon:paon ?paon}} OPTIONAL {{?addr lrcommon:saon ?saon}}
-  OPTIONAL {{?addr lrcommon:street ?street}} {nf}
-}} ORDER BY DESC(?date) LIMIT 30""")
+def _paon_exact(paon, number):
+    return paon.replace(" ","").upper() == number.replace(" ","").upper()
 
-def fetch_area(postcode):
-    cutoff = (datetime.now()-timedelta(days=5*365)).strftime("%Y-%m-%d")
-    return run_sparql(f"""
+@st.cache_data(ttl=3600)
+def fetch_all_lr(postcode):
+    """Fetch all transactions for a postcode: SPARQL first, REST fallback."""
+    q = f"""
 PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
 PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
-PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 SELECT ?date ?price ?paon ?saon ?street ?type WHERE {{
   ?t lrppi:propertyAddress ?addr ; lrppi:pricePaid ?price ;
      lrppi:transactionDate ?date ; lrppi:propertyType ?type .
   ?addr lrcommon:postcode "{postcode}" .
   OPTIONAL {{?addr lrcommon:paon ?paon}} OPTIONAL {{?addr lrcommon:saon ?saon}}
   OPTIONAL {{?addr lrcommon:street ?street}}
-  FILTER(?date >= "{cutoff}"^^xsd:date)
-}} ORDER BY DESC(?date) LIMIT 100""")
+}} ORDER BY DESC(?date) LIMIT 300"""
+    try:
+        return _sparql_raw(q)
+    except Exception:
+        # SPARQL blocked — fall back to REST API
+        try:
+            return fetch_lr_rest(postcode)
+        except Exception as e:
+            st.warning(f"Land Registry error (both endpoints failed): {e}")
+            return []
+
+def fetch_history(postcode, number):
+    rows = fetch_all_lr(postcode)
+    if number:
+        rows = [r for r in rows if _paon_exact(r.get("paon",""), number)]
+    return rows[:30]
+
+def fetch_area(postcode):
+    cutoff = (datetime.now()-timedelta(days=5*365)).strftime("%Y-%m-%d")
+    rows = fetch_all_lr(postcode)
+    return [r for r in rows if (r.get("date","") or "")[:10] >= cutoff][:100]
 
 TYPE_MAP = {"D":"Detached","S":"Semi-detached","T":"Terraced","F":"Flat","O":"Other"}
 def parse_type(uri):
@@ -258,26 +301,21 @@ with st.expander("🔧 API health check", expanded=False):
                 st.error(f"❌ Error after {elapsed}s: {e}")
 
         with col2:
-            st.markdown("**Land Registry SPARQL**")
+            st.markdown("**Land Registry**")
+            # Test SPARQL
             t0 = time.time()
             try:
-                r = _session.get(LR_SPARQL,
-                                 params={"query": "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1", "output": "json"},
-                                 headers=LR_HEADERS,
-                                 timeout=15)
-                if r.status_code == 403:
-                    r = _session.post(LR_SPARQL,
-                                      data={"query": "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1", "output": "json"},
-                                      headers={**LR_HEADERS, "Content-Type": "application/x-www-form-urlencoded"},
-                                      timeout=15)
-                elapsed = round(time.time() - t0, 2)
-                if r.ok:
-                    st.success(f"✅ OK — {r.status_code} — {elapsed}s")
-                else:
-                    st.error(f"❌ {r.status_code} — {elapsed}s")
+                _sparql_raw("SELECT ?s WHERE { ?s ?p ?o } LIMIT 1")
+                st.success(f"✅ SPARQL OK — {round(time.time()-t0,2)}s")
             except Exception as e:
-                elapsed = round(time.time() - t0, 2)
-                st.error(f"❌ Error after {elapsed}s: {e}")
+                st.error(f"❌ SPARQL: {e}")
+            # Test REST fallback
+            t0 = time.time()
+            try:
+                rows = fetch_lr_rest("SM6 9LD")
+                st.success(f"✅ REST OK — {round(time.time()-t0,2)}s — {len(rows)} record(s)")
+            except Exception as e:
+                st.error(f"❌ REST: {e}")
 
 with st.form("search_form"):
     c1,c2,c3=st.columns([2,2,1])
