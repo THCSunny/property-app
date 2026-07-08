@@ -157,14 +157,29 @@ def _num_key(text):
 def paon_to_key(paon): return _num_key(paon.strip().upper())
 
 # ── Land Registry ─────────────────────────────────────────────────────────────
+LR_HEADERS = {
+    "Accept": "application/sparql-results+json",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Accept-Language": "en-GB,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Referer": "https://landregistry.data.gov.uk/qonsole",
+    "Origin": "https://landregistry.data.gov.uk",
+}
+
 def run_sparql(query):
+    # Try GET first, then POST as fallback (different WAF rules may apply)
     try:
-        r = _session.get(LR_SPARQL, params={"query":query,"output":"json"},
-                         headers={"Accept":"application/sparql-results+json",
-                                  "User-Agent":"Mozilla/5.0 Chrome/120.0.0.0"},
-                         timeout=15)
+        r = _session.get(LR_SPARQL, params={"query": query, "output": "json"},
+                         headers=LR_HEADERS, timeout=15)
+        if r.status_code == 403:
+            # Fallback: POST with form-encoded body
+            r = _session.post(LR_SPARQL,
+                              data={"query": query, "output": "json"},
+                              headers={**LR_HEADERS,
+                                       "Content-Type": "application/x-www-form-urlencoded"},
+                              timeout=15)
         r.raise_for_status()
-        return [{k:v["value"] for k,v in b.items()} for b in r.json()["results"]["bindings"]]
+        return [{k: v["value"] for k, v in b.items()} for b in r.json()["results"]["bindings"]]
     except Exception as e:
         st.warning(f"Land Registry error: {e}"); return []
 
@@ -248,9 +263,13 @@ with st.expander("🔧 API health check", expanded=False):
             try:
                 r = _session.get(LR_SPARQL,
                                  params={"query": "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1", "output": "json"},
-                                 headers={"Accept": "application/sparql-results+json",
-                                          "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0"},
+                                 headers=LR_HEADERS,
                                  timeout=15)
+                if r.status_code == 403:
+                    r = _session.post(LR_SPARQL,
+                                      data={"query": "SELECT ?s WHERE { ?s ?p ?o } LIMIT 1", "output": "json"},
+                                      headers={**LR_HEADERS, "Content-Type": "application/x-www-form-urlencoded"},
+                                      timeout=15)
                 elapsed = round(time.time() - t0, 2)
                 if r.ok:
                     st.success(f"✅ OK — {r.status_code} — {elapsed}s")
