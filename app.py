@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import requests
 from requests.adapters import HTTPAdapter
@@ -6,7 +7,24 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 # ── Config ────────────────────────────────────────────────────────────────────
-EPC_TOKEN = st.secrets["EPC_TOKEN"]
+def get_secret(key, default=None):
+    """Read a secret from Streamlit secrets (local) or environment variable (Railway/cloud)."""
+    # Try environment variable first (Railway, Render, etc.)
+    val = os.environ.get(key)
+    if val:
+        return val
+    # Fall back to Streamlit secrets (local secrets.toml or Streamlit Cloud)
+    try:
+        return st.secrets[key]
+    except Exception:
+        if default is not None:
+            return default
+        raise RuntimeError(
+            f"Secret '{key}' not found. Set it as an environment variable "
+            f"or in .streamlit/secrets.toml"
+        )
+
+EPC_TOKEN = get_secret("EPC_TOKEN")
 EPC_API      = "https://api.get-energy-performance-data.communities.gov.uk/api/domestic/search"
 EPC_CERT_API = "https://api.get-energy-performance-data.communities.gov.uk/api/certificate"
 LR_SPARQL    = "https://landregistry.data.gov.uk/landregistry/query"
