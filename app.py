@@ -361,12 +361,23 @@ if submitted:
         co2_pot  = d.get("co2_emissions_potential","")
         energy_cur  = d.get("energy_consumption_current","")
         energy_pot  = d.get("energy_consumption_potential","")
-        heat_cost   = (d.get("heating_cost_current") or {}).get("value","")
-        water_cost  = (d.get("hot_water_cost_current") or {}).get("value","")
-        light_cost  = (d.get("lighting_cost_current") or {}).get("value","")
-        heat_pot    = (d.get("heating_cost_potential") or {}).get("value","")
-        water_pot   = (d.get("hot_water_cost_potential") or {}).get("value","")
-        light_pot   = (d.get("lighting_cost_potential") or {}).get("value","")
+        def cost_val(obj):
+            """Extract numeric cost whether obj is {'value':..} dict, int, float, or string."""
+            if isinstance(obj, dict):
+                obj = obj.get("value", "")
+            if isinstance(obj, str):
+                try:
+                    return float(obj.replace(",", "").replace("£", ""))
+                except:
+                    return ""
+            return obj if isinstance(obj, (int, float)) else ""
+
+        heat_cost   = cost_val(d.get("heating_cost_current"))
+        water_cost  = cost_val(d.get("hot_water_cost_current"))
+        light_cost  = cost_val(d.get("lighting_cost_current"))
+        heat_pot    = cost_val(d.get("heating_cost_potential"))
+        water_pot   = cost_val(d.get("hot_water_cost_potential"))
+        light_pot   = cost_val(d.get("lighting_cost_potential"))
 
         # ── Hero card ─────────────────────────────────────────────────────────
         bg = EPC_COLORS.get(rating, "#aaa")
@@ -480,10 +491,9 @@ if submitted:
             df_cost = pd.DataFrame(cost_data)
             st.dataframe(df_cost, use_container_width=True, hide_index=True)
             if heat_cost and heat_pot:
-                total_saving = (
-                    (int(heat_cost)+int(water_cost)+int(light_cost)) -
-                    (int(heat_pot)+int(water_pot)+int(light_pot))
-                )
+                cur_total = sum(x for x in [heat_cost, water_cost, light_cost] if isinstance(x,(int,float)))
+                pot_total = sum(x for x in [heat_pot, water_pot, light_pot] if isinstance(x,(int,float)))
+                total_saving = int(cur_total - pot_total)
                 st.success(f"Potential annual saving if all improvements made: **£{total_saving:,}**")
 
         with tab3:
@@ -503,19 +513,30 @@ if submitted:
             """, unsafe_allow_html=True)
 
         with tab4:
+            def money_val(obj):
+                """Extract numeric value whether obj is a dict {'value':..}, an int, or a string."""
+                if isinstance(obj, dict):
+                    obj = obj.get("value", 0)
+                if isinstance(obj, str):
+                    try:
+                        return float(obj.replace(",", "").replace("£", ""))
+                    except:
+                        return 0
+                return obj if isinstance(obj, (int, float)) else 0
+
             improvements = d.get("suggested_improvements", [])
             if improvements:
-                total_saving = sum(i.get("typical_saving",{}).get("value",0) for i in improvements)
-                st.markdown(f"**{len(improvements)} recommended improvements** · Combined typical saving: **£{total_saving:,}/year**")
+                total_saving = sum(money_val(i.get("typical_saving")) for i in improvements)
+                st.markdown(f"**{len(improvements)} recommended improvements** · Combined typical saving: **£{int(total_saving):,}/year**")
                 for imp in improvements:
-                    saving  = imp.get("typical_saving",{}).get("value","")
-                    cost    = imp.get("indicative_cost","")
+                    saving     = money_val(imp.get("typical_saving"))
+                    cost       = money_val(imp.get("indicative_cost"))
                     new_rating = imp.get("energy_performance_rating","")
-                    itype   = imp.get("improvement_type","")
+                    itype      = imp.get("improvement_type","")
                     st.markdown(f"""<div class='improve-row'>
                         <strong>Improvement {imp.get('sequence','')}: {itype}</strong><br>
-                        Typical saving: <strong>£{saving}/year</strong> &nbsp;·&nbsp;
-                        Indicative cost: <strong>£{cost}</strong> &nbsp;·&nbsp;
+                        Typical saving: <strong>£{int(saving):,}/year</strong> &nbsp;·&nbsp;
+                        Indicative cost: <strong>£{int(cost):,}</strong> &nbsp;·&nbsp;
                         New rating after: <strong>{new_rating}/100</strong>
                     </div>""", unsafe_allow_html=True)
             else:
